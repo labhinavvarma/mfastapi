@@ -1,39 +1,37 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.routing import Mount
+from mcp.server.fastmcp import FastMCP
 from mcp.server.sse import SseServerTransport
+from starlette.routing import Mount
+from tools.milliman_tools import milliman_tool
+from prompts.milliman_prompts import milliman_prompt
 
-from milliman_mcp_server import mcp_app, HEALTH_STATE
-from invoke_router import route as invoke_router
+# Initialize MCP
+mcp = FastMCP("Milliman MCP Server")
+mcp.add_tool(milliman_tool)
+mcp.add_prompt(milliman_prompt)
 
-app = FastAPI(title="Milliman MCP + FastAPI Server")
-
-# CORS setup
+# FastAPI wrapper
+app = FastAPI(title="Milliman API Gateway")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"]
+    allow_origins=["*"], allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"]
 )
 
-# Health check endpoint
-@app.get("/healthz")
-async def healthz():
-    return {
-        "server": "up",
-        "token_api": HEALTH_STATE["token"],
-        "mcid_api": HEALTH_STATE["mcid"],
-        "medical_api": HEALTH_STATE["medical"]
-    }
-
-# Tool invocation route
-app.include_router(invoke_router, prefix="/tool")
-
-# Mount MCP app and SSE
-app.mount("/", mcp_app)
+# Mount MCP App
+app.mount("/", mcp.app)
 app.router.routes.append(Mount("/messages", app=SseServerTransport("/messages")))
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+# Optional: Add FastAPI endpoint to invoke the tool manually
+from fastapi import Request, HTTPException
+
+@app.post("/invoke")
+async def invoke(request: Request):
+    data = await request.json()
+    input_data = data.get("input", {})
+    try:
+        result = await milliman_tool.invoke(input_data)
+        return {"result": result.text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
