@@ -93,33 +93,10 @@ app.add_middleware(
 # Mount the FastMCP router under /mcp
 app.mount("/mcp", mcp.app)
 
-# Optional: remove or adapt the /all endpoint since bodies now come from client
-```
-
-### client.py
-```python
-import json
-import requests
-
-BASE_URL = "http://localhost:8000"
-
-# Helper to invoke an MCP tool by name, passing JSON body when needed
-def invoke_tool(name, payload=None):
-    url = f"{BASE_URL}/tool/{name}"
-    resp = requests.post(url, json=payload or {})
-    resp.raise_for_status()
-    return resp.json()
-
+# If executed directly, start Uvicorn
 if __name__ == "__main__":
-    # Example: Pass request bodies from local files or inline JSON
-    mcid_body = json.load(open('mcid_request.json'))
-    print("=== mcid_search ===")
-    print(invoke_tool("mcid_search", mcid_body))
+    import uvicorn
 
-    medical_body = json.load(open('medical_request.json'))
-    print("=== submit_medical ===")
-    print(invoke_tool("submit_medical", medical_body))
-
-    print("=== get_token ===")
-    print(invoke_tool("get_token"))
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 ```
