@@ -1,82 +1,81 @@
 ### server.py
 ```python
 import os
-import asyncio
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from mcp.server.fastmcp import FastMCP
 
 # --- Configuration (optionally from environment variables) ---
-TOKEN_URL = os.getenv("TOKEN_URL", "https://securefed.antheminc.com/as/token.oauth2")
+TOKEN_URL = os.getenv(
+    "TOKEN_URL",
+    "https://securefed.antheminc.com/as/token.oauth2"
+)
 TOKEN_PAYLOAD = {
     'grant_type': 'client_credentials',
     'client_id': os.getenv("CLIENT_ID", 'MILLIMAN'),
-    'client_secret': os.getenv("CLIENT_SECRET", 'qCZpW9ixf7KTQh5Ws5YmUUqcO6JRfz0GsITmFS87RHLOls8fh0pv8TcyVEVmWRQa')
+    'client_secret': os.getenv(
+        "CLIENT_SECRET",
+        'qCZpW9ixf7KTQh5Ws5YmUUqcO6JRfz0GsITmFS87RHLOls8fh0pv8TcyVEVmWRQa'
+    )
 }
 TOKEN_HEADERS = {'Content-Type': 'application/x-www-form-urlencoded'}
-MCID_URL = os.getenv("MCID_URL", "https://mcid-app-prod.anthem.com:443/MCIDExternalService/V2/extSearchService/json")
-MEDICAL_URL = os.getenv("MEDICAL_URL", "https://hix-clm-internaltesting-prod.anthem.com/medical")
-
-# Hardcoded request bodies
-MCID_REQUEST_BODY = {
-    "requestID": "1",
-    "processStatus": {"completed": "false", "isMemput": "false", "errorCode": None, "errorText": None},
-    "consumer": [{
-        "firstName": "JUNEY",
-        "lastName": "TROR",
-        "middleName": None,
-        "sex": "F",
-        "dob": "196971109",
-        "addressList": [{"type": "P", "zip": None}],
-        "id": {"ssn": None}
-    }],
-    "searchSetting": {"minScore": "100", "maxResult": "1"}
-}
-MEDICAL_REQUEST_BODY = {
-    "requestID": "77554079",
-    "firstName": "JUNEY",
-    "lastName": "TROR",
-    "ssn": "148681406",
-    "dateOfBirth": "1978-01-20",
-    "gender": "F",
-    "zipCodes": ["23060", "23229", "23242"],
-    "callerId": "Milliman-Test16"
-}
+MCID_URL = os.getenv(
+    "MCID_URL",
+    "https://mcid-app-prod.anthem.com:443/MCIDExternalService/V2/extSearchService/json"
+)
+MEDICAL_URL = os.getenv(
+    "MEDICAL_URL",
+    "https://hix-clm-internaltesting-prod.anthem.com/medical"
+)
 
 # --- Initialize FastMCP ---
 mcp = FastMCP("Milliman Dashboard Tools")
 
 @mcp.tool(name="get_token", description="Fetch OAuth2 access token")
 async def get_token_tool() -> str:
+    """No input required; returns an access token string."""
     async with httpx.AsyncClient() as client:
         resp = await client.post(TOKEN_URL, data=TOKEN_PAYLOAD, headers=TOKEN_HEADERS)
         resp.raise_for_status()
         data = resp.json()
-        token = data.get("access_token")
-        if not token:
-            raise HTTPException(status_code=500, detail="Token not found in response")
-        return token
+    token = data.get("access_token")
+    if not token:
+        raise HTTPException(status_code=500, detail="Token not found in response")
+    return token
 
 @mcp.tool(name="mcid_search", description="Perform MCID external search")
-async def mcid_search_tool() -> dict:
+async def mcid_search_tool(request_body: dict) -> dict:
+    """
+    Expects a JSON body with MCID search parameters from the client.
+    Returns status code and response body.
+    """
+    if not isinstance(request_body, dict):
+        raise HTTPException(status_code=400, detail="MCID request body must be a JSON object")
     async with httpx.AsyncClient(verify=False) as client:
         resp = await client.post(
             MCID_URL,
             headers={"Content-Type": "application/json", "Apiuser": "MillimanUser"},
-            json=MCID_REQUEST_BODY
+            json=request_body
         )
         resp.raise_for_status()
         return {"status_code": resp.status_code, "body": resp.json()}
 
 @mcp.tool(name="submit_medical", description="Submit medical eligibility request")
-async def submit_medical_tool() -> dict:
+async def submit_medical_tool(request_body: dict) -> dict:
+    """
+    Expects a JSON body with medical request parameters from the client.
+    Obtains an OAuth token internally.
+    Returns status code and response body.
+    """
+    if not isinstance(request_body, dict):
+        raise HTTPException(status_code=400, detail="Medical request body must be a JSON object")
     token = await get_token_tool()
     async with httpx.AsyncClient() as client:
         resp = await client.post(
             MEDICAL_URL,
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json=MEDICAL_REQUEST_BODY
+            json=request_body
         )
         resp.raise_for_status()
         return {"status_code": resp.status_code, "body": resp.json() if resp.content else {}}
@@ -91,34 +90,36 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Mount MCP router at /mcp
+# Mount the FastMCP router under /mcp
 app.mount("/mcp", mcp.app)
 
-# Convenience endpoint to run all tools
-@app.get("/all")
-async def call_all():
-    try:
-        token = await get_token_tool()
-        mcid = await mcid_search_tool()
-        medical = await submit_medical_tool()
-        return {"get_token": token, "mcid_search": mcid, "medical_submit": medical}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# Optional: remove or adapt the /all endpoint since bodies now come from client
 ```
 
----
+### client.py
+```python
+import json
+import requests
 
-This version:
-- Loads credentials/URLs from environment if available
-- Uses `httpx.AsyncClient` for all external calls (no blocking sync requests)
-- Adds `resp.raise_for_status()` and token existence checks
-- Mounts the FastMCP router under `/mcp`
-- Provides a stable `/all` endpoint that surfaces tool outputs
+BASE_URL = "http://localhost:8000"
 
-You can now run:
-```bash
-pip install fastapi uvicorn httpx mcp-server
-uvicorn server:app --reload
+# Helper to invoke an MCP tool by name, passing JSON body when needed
+def invoke_tool(name, payload=None):
+    url = f"{BASE_URL}/tool/{name}"
+    resp = requests.post(url, json=payload or {})
+    resp.raise_for_status()
+    return resp.json()
+
+if __name__ == "__main__":
+    # Example: Pass request bodies from local files or inline JSON
+    mcid_body = json.load(open('mcid_request.json'))
+    print("=== mcid_search ===")
+    print(invoke_tool("mcid_search", mcid_body))
+
+    medical_body = json.load(open('medical_request.json'))
+    print("=== submit_medical ===")
+    print(invoke_tool("submit_medical", medical_body))
+
+    print("=== get_token ===")
+    print(invoke_tool("get_token"))
 ```
