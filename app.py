@@ -1,36 +1,98 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from mcp.server.fastmcp import FastMCP
-from mcp.server.sse import SseServerTransport
-from starlette.routing import Mount
+import os
+import httpx
+from fastapi import HTTPException
+from fastmcp import FastMCP
 
-from tools.milliman_tools import milliman_tool
-from prompts.milliman_prompts import milliman_prompt
+# ——— FastMCP setup ———
+mcp = FastMCP(name="Milliman Dashboard Tools")
 
-# FastMCP instance
-mcp = FastMCP("Milliman MCP Server")
-mcp.add_tool(milliman_tool)
-mcp.add_prompt(milliman_prompt)
-
-# Wrap in FastAPI
-app = FastAPI(title="Milliman FastMCP API")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"], allow_credentials=True,
-    allow_methods=["*"], allow_headers=["*"],
+# ——— Configuration ———
+TOKEN_URL = os.getenv(
+    "TOKEN_URL",
+    "https://securefed.antheminc.com/as/token.oauth2"
+)
+TOKEN_PAYLOAD = {
+    'grant_type': 'client_credentials',
+    'client_id': os.getenv("CLIENT_ID", 'MILLIMAN'),
+    'client_secret': os.getenv(
+        "CLIENT_SECRET",
+        'qCZpW9ixf7KTQh5Ws5YmUUqcO6JRfz0GsITmFS87RHLOls8fh0pv8TcyVEVmWRQa'
+    ),
+}
+MCID_URL = os.getenv(
+    "MCID_URL",
+    "https://mcid-app-prod.anthem.com:443/MCIDExternalService/V2/extSearchService/json"
+)
+MEDICAL_URL = os.getenv(
+    "MEDICAL_URL",
+    "https://hix-clm-internaltesting-prod.anthem.com/medical"
 )
 
-# Mount MCP and SSE
-app.mount("/", mcp.app)
-app.router.routes.append(Mount("/messages", app=SseServerTransport("/messages")))
+# ——— Tools ———
 
-# FastAPI route to call tool directly
-@app.post("/invoke")
-async def invoke_tool(request: Request):
-    try:
-        payload = await request.json()
-        tool_input = payload.get("input", {})
-        result = await milliman_tool.invoke(tool_input)
-        return {"result": result.text}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@mcp.tool(
+    name="get_token",
+    description="Fetch OAuth2 access token (no input)."
+)
+async def get_token_tool() -> str:
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(TOKEN_URL, data=TOKEN_PAYLOAD)
+        resp.raise_for_status()
+        data = resp.json()
+    token = data.get("access_token")
+    if not token:
+        raise HTTPException(status_code=500, detail="No access_token in response")
+    return token
+
+@mcp.tool(
+    name="mcid_search",
+    description="Perform MCID search; pass full MCID JSON body.",
+)
+async def mcid_search_tool(request_body: dict) -> dict:
+    if not isinstance(request_body, dict):
+        raise HTTPException(status_code=400, detail="Body must be JSON object")
+    async with httpx.AsyncClient(verify=False) as client:
+        resp = await client.post(
+            MCID_URL,
+            headers={
+                "Content-Type": "application/json",
+                "Apiuser": "MillimanUser"
+            },
+            json=request_body
+        )
+        resp.raise_for_status()
+    return {"status_code": resp.status_code, "body": resp.json()}
+
+@mcp.tool(
+    name="submit_medical",
+    description="Submit medical‐eligibility request; pass full medical JSON body.",
+)
+async def submit_medical_tool(request_body: dict) -> dict:
+    if not isinstance(request_body, dict):
+        raise HTTPException(status_code=400, detail="Body must be JSON object")
+    # get token internally
+    token = await get_token_tool()
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            MEDICAL_URL,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            },
+            json=request_body
+        )
+        resp.raise_for_status()
+    return {"status_code": resp.status_code, "body": resp.json() if resp.content else {}}
+
+
+# ——— Run server ———
+if __name__ == "__main__":
+    # This serves:
+    #  • POST /tool/{tool_name}
+    #  • GET /prompt/{prompt_name}  (if you add prompts later)
+    #  • SSE on  /messages
+    mcp.run(
+        transport="sse",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8000"))
+    )
