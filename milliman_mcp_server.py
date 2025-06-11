@@ -2,11 +2,10 @@
 ```python
 import os
 import httpx
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
+from fastapi import HTTPException
 
-# --- Configuration (optionally from environment variables) ---
+# --- Configuration (env overrideable) ---
 TOKEN_URL = os.getenv(
     "TOKEN_URL",
     "https://securefed.antheminc.com/as/token.oauth2"
@@ -19,7 +18,6 @@ TOKEN_PAYLOAD = {
         'qCZpW9ixf7KTQh5Ws5YmUUqcO6JRfz0GsITmFS87RHLOls8fh0pv8TcyVEVmWRQa'
     )
 }
-TOKEN_HEADERS = {'Content-Type': 'application/x-www-form-urlencoded'}
 MCID_URL = os.getenv(
     "MCID_URL",
     "https://mcid-app-prod.anthem.com:443/MCIDExternalService/V2/extSearchService/json"
@@ -29,14 +27,19 @@ MEDICAL_URL = os.getenv(
     "https://hix-clm-internaltesting-prod.anthem.com/medical"
 )
 
-# --- Initialize FastMCP ---
-mcp = FastMCP("Milliman Dashboard Tools")
+# --- Initialize FastMCP server with SSE transport ---
+mcp = FastMCP(
+    name="Milliman Dashboard Tools",
+    host=os.getenv("HOST", "0.0.0.0"),
+    port=int(os.getenv("PORT", "8000")),
+    transport="sse"
+)
 
 @mcp.tool(name="get_token", description="Fetch OAuth2 access token")
 async def get_token_tool() -> str:
-    """No input required; returns an access token string."""
+    """No input; returns Bearer token string."""
     async with httpx.AsyncClient() as client:
-        resp = await client.post(TOKEN_URL, data=TOKEN_PAYLOAD, headers=TOKEN_HEADERS)
+        resp = await client.post(TOKEN_URL, data=TOKEN_PAYLOAD)
         resp.raise_for_status()
         data = resp.json()
     token = data.get("access_token")
@@ -47,7 +50,7 @@ async def get_token_tool() -> str:
 @mcp.tool(name="mcid_search", description="Perform MCID external search")
 async def mcid_search_tool(request_body: dict) -> dict:
     """
-    Expects a JSON body with MCID search parameters from the client.
+    Expects client-provided JSON body for MCID search.
     """
     if not isinstance(request_body, dict):
         raise HTTPException(status_code=400, detail="MCID request body must be a JSON object")
@@ -63,8 +66,8 @@ async def mcid_search_tool(request_body: dict) -> dict:
 @mcp.tool(name="submit_medical", description="Submit medical eligibility request")
 async def submit_medical_tool(request_body: dict) -> dict:
     """
-    Expects a JSON body with medical request parameters from the client.
-    Obtains an OAuth token internally.
+    Expects client-provided JSON body for medical eligibility.
+    Obtains Stripe token internally.
     """
     if not isinstance(request_body, dict):
         raise HTTPException(status_code=400, detail="Medical request body must be a JSON object")
@@ -78,23 +81,7 @@ async def submit_medical_tool(request_body: dict) -> dict:
         resp.raise_for_status()
         return {"status_code": resp.status_code, "body": resp.json() if resp.content else {}}
 
-# --- FastAPI application ---
-app = FastAPI(title="Milliman MCP Server", version="0.1.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"]
-)
-
-# Include the FastMCP router under /mcp
-app.include_router(mcp.router, prefix="/mcp")
-
-# If executed directly, start Uvicorn
+# --- Run the MCP server ---
 if __name__ == "__main__":
-    import uvicorn
-
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    mcp.run()
 ```
