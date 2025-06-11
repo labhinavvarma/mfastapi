@@ -1,57 +1,55 @@
 import streamlit as st
-import requests
+import requests, json
 
-st.set_page_config(page_title="Milliman MCP Client", layout="centered")
-st.title("🏥 MCID + Medical Claims Submission")
+st.set_page_config(page_title="Milliman Dashboard Client", layout="wide")
+st.title("📬 Milliman Dashboard Tool Invoker")
 
-API_URL = "http://localhost:8000/tool/invoke"
+# ——— Inputs ———
+base_url = st.text_input("Server URL", "http://localhost:8000")
+tool = st.selectbox("Tool", ["get_token", "mcid_search", "submit_medical"])
 
-with st.form("submit_form"):
-    fname = st.text_input("First Name", value="JUNEY")
-    lname = st.text_input("Last Name", value="TROR")
-    gender = st.selectbox("Gender", ["F", "M"])
-    dob = st.text_input("Date of Birth (YYYY-MM-DD)", value="1978-01-20")
-    ssn = st.text_input("SSN", value="148681406")
-    zipcodes = st.text_input("ZIP Codes (comma-separated)", value="23060,23229,23242")
-
-    submitted = st.form_submit_button("Submit")
-
-if submitted:
-    data = {
-        "mcid_payload": {
-            "requestID": "1",
-            "consumer": [{
-                "firstName": fname,
-                "lastName": lname,
-                "sex": gender,
-                "dob": dob.replace("-", ""),
-                "addressList": [{"type": "P", "zip": None}],
-                "id": {"ssn": ssn}
-            }],
-            "searchSetting": {
-                "minScore": "100",
-                "maxResult": "1"
-            }
-        },
-        "medical_payload": {
-            "requestID": "REQ001",
-            "firstName": fname,
-            "lastName": lname,
-            "ssn": ssn,
-            "dateOfBirth": dob,
-            "gender": gender,
-            "zipCodes": [z.strip() for z in zipcodes.split(",")],
-            "callerId": "Milliman-Streamlit"
-        }
+# default payloads
+defaults = {
+    "mcid_search": {
+        "requestID": "1",
+        "processStatus": {"completed":"false","isMemput":"false","errorCode":None,"errorText":None},
+        "consumer":[{"firstName":"JUNEY","lastName":"TROR","middleName":None,"sex":"F","dob":"196971109","addressList":[{"type":"P","zip":None}],"id":{"ssn":None}}],
+        "searchSetting":{"minScore":"100","maxResult":"1"}
+    },
+    "submit_medical": {
+        "requestID":"77554079","firstName":"JUNEY","lastName":"TROR","ssn":"148681406",
+        "dateOfBirth":"1978-01-20","gender":"F",
+        "zipCodes":["23060","23229","23242"],"callerId":"Milliman-Test16"
     }
+}
 
-    with st.spinner("Calling MCP server..."):
-        response = requests.post(API_URL, json={"tool": "submit_requests", "input": data})
-        result = response.json()
-        st.success("✅ Response received!")
+# ——— JSON editor ———
+if tool in defaults:
+    raw = st.text_area(
+        "JSON payload",
+        value=json.dumps(defaults[tool], indent=2),
+        height=200
+    )
+else:
+    raw = "{}"
 
-        st.subheader("MCID Response")
-        st.json(result["content"]["mcid_response"])
+if st.button("Invoke"):
+    endpoint = f"{base_url.rstrip('/')}/tool/{tool}"
+    try:
+        payload = json.loads(raw) if tool != "get_token" else None
+    except json.JSONDecodeError as e:
+        st.error(f"Invalid JSON: {e}")
+        st.stop()
 
-        st.subheader("Medical Claims Response")
-        st.json(result["content"]["medical_response"])
+    with st.spinner(f"POST {endpoint}"):
+        try:
+            if tool == "get_token":
+                resp = requests.post(endpoint, timeout=30)
+            else:
+                resp = requests.post(endpoint, json=payload, timeout=30)
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            st.error(f"Request failed: {e}")
+        else:
+            st.success(f"{resp.status_code} OK")
+            st.json(resp.json())
