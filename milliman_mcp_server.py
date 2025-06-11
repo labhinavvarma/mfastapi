@@ -48,7 +48,6 @@ async def get_token_tool() -> str:
 async def mcid_search_tool(request_body: dict) -> dict:
     """
     Expects a JSON body with MCID search parameters from the client.
-    Returns status code and response body.
     """
     if not isinstance(request_body, dict):
         raise HTTPException(status_code=400, detail="MCID request body must be a JSON object")
@@ -66,7 +65,6 @@ async def submit_medical_tool(request_body: dict) -> dict:
     """
     Expects a JSON body with medical request parameters from the client.
     Obtains an OAuth token internally.
-    Returns status code and response body.
     """
     if not isinstance(request_body, dict):
         raise HTTPException(status_code=400, detail="Medical request body must be a JSON object")
@@ -90,8 +88,8 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
-# Mount the FastMCP router under /mcp
-app.mount("/mcp", mcp.app)
+# Include the FastMCP router under /mcp
+app.include_router(mcp.router, prefix="/mcp")
 
 # If executed directly, start Uvicorn
 if __name__ == "__main__":
