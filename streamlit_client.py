@@ -1,20 +1,38 @@
 import streamlit as st
-import requests, json
+import requests
+import json
 
+# Streamlit page config
 st.set_page_config(page_title="Milliman Dashboard Client", layout="wide")
 st.title("📬 Milliman Dashboard Tool Invoker")
 
-# ——— Inputs ———
-base_url = st.text_input("Server URL", "http://localhost:8000")
-tool = st.selectbox("Tool", ["get_token", "mcid_search", "submit_medical"])
+# 1) Server URL input
+def get_base_url():
+    return st.sidebar.text_input(
+        "FastMCP Server URL", 
+        value="http://localhost:8000",
+        help="Enter your server's base URL (e.g. http://localhost:8000)"
+    )
 
-# default payloads
+# 2) Choose an action
+action = st.sidebar.radio(
+    "Action:",
+    options=["get_token", "mcid_search", "submit_medical", "call_all"],
+    index=3 if False else 3
+)
+
+# 3) JSON payload editor for actions that need it
 defaults = {
     "mcid_search": {
         "requestID": "1",
         "processStatus": {"completed":"false","isMemput":"false","errorCode":None,"errorText":None},
-        "consumer":[{"firstName":"JUNEY","lastName":"TROR","middleName":None,"sex":"F","dob":"196971109","addressList":[{"type":"P","zip":None}],"id":{"ssn":None}}],
-        "searchSetting":{"minScore":"100","maxResult":"1"}
+        "consumer": [{
+            "firstName":"JUNEY","lastName":"TROR","middleName":None,
+            "sex":"F","dob":"196971109",
+            "addressList":[{"type":"P","zip":None}],
+            "id":{"ssn":None}
+        }],
+        "searchSetting": {"minScore":"100","maxResult":"1"}
     },
     "submit_medical": {
         "requestID":"77554079","firstName":"JUNEY","lastName":"TROR","ssn":"148681406",
@@ -23,33 +41,43 @@ defaults = {
     }
 }
 
-# ——— JSON editor ———
-if tool in defaults:
+payload = None
+if action in ["mcid_search", "submit_medical"]:
     raw = st.text_area(
-        "JSON payload",
-        value=json.dumps(defaults[tool], indent=2),
-        height=200
+        label="JSON payload:",
+        value=json.dumps(defaults[action], indent=2),
+        height=250
     )
-else:
-    raw = "{}"
-
-if st.button("Invoke"):
-    endpoint = f"{base_url.rstrip('/')}/tool/{tool}"
     try:
-        payload = json.loads(raw) if tool != "get_token" else None
+        payload = json.loads(raw)
     except json.JSONDecodeError as e:
         st.error(f"Invalid JSON: {e}")
         st.stop()
 
-    with st.spinner(f"POST {endpoint}"):
+# 4) Invoke button
+if st.button("▶️ Invoke"):
+    base_url = get_base_url().rstrip('/')
+    if action == "call_all":
+        url = f"{base_url}/all"
         try:
-            if tool == "get_token":
-                resp = requests.post(endpoint, timeout=30)
-            else:
-                resp = requests.post(endpoint, json=payload, timeout=30)
+            resp = requests.get(url, timeout=30)
             resp.raise_for_status()
         except requests.RequestException as e:
             st.error(f"Request failed: {e}")
         else:
             st.success(f"{resp.status_code} OK")
             st.json(resp.json())
+    else:
+        url = f"{base_url}/tool/{action}"
+        try:
+            resp = requests.post(url, json=payload, timeout=30)
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            st.error(f"Request failed: {e}")
+        else:
+            st.success(f"{resp.status_code} OK")
+            st.json(resp.json())
+
+# 5) Footer
+st.markdown("---")
+st.caption("Ensure your FastMCP server is running and reachable before invoking.")
